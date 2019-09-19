@@ -24,9 +24,9 @@ def parse_args():
     parser.add_argument('--num_epochs', dest='num_epochs', help='Maximum number of training epochs.',
           default=5, type=int)
     parser.add_argument('--batch_size', dest='batch_size', help='Batch size.',
-          default=16, type=int)
+          default=64, type=int)
     parser.add_argument('--lr', dest='lr', help='Base learning rate.',
-          default=0.001, type=float)
+          default=0.00001, type=float)
     parser.add_argument('--dataset', dest='dataset', help='Dataset type.', default='Pose_300W_LP', type=str)
     parser.add_argument('--data_dir', dest='data_dir', help='Directory path for data.',
           default='', type=str)
@@ -96,7 +96,7 @@ if __name__ == '__main__':
         saved_state_dict = torch.load(args.snapshot)
         model.load_state_dict(saved_state_dict)
 
-    print 'Loading data.'
+    print('Loading data.')
 
     transformations = transforms.Compose([transforms.Scale(240),
     transforms.RandomCrop(224), transforms.ToTensor(),
@@ -112,6 +112,8 @@ if __name__ == '__main__':
         pose_dataset = datasets.AFLW2000(args.data_dir, args.filename_list, transformations)
     elif args.dataset == 'BIWI':
         pose_dataset = datasets.BIWI(args.data_dir, args.filename_list, transformations)
+    elif args.dataset == 'Custom':
+        pose_dataset = datasets.Custom(args.data_dir, args.filename_list, transformations)
     elif args.dataset == 'AFLW':
         pose_dataset = datasets.AFLW(args.data_dir, args.filename_list, transformations)
     elif args.dataset == 'AFLW_aug':
@@ -119,7 +121,7 @@ if __name__ == '__main__':
     elif args.dataset == 'AFW':
         pose_dataset = datasets.AFW(args.data_dir, args.filename_list, transformations)
     else:
-        print 'Error: not a valid dataset name'
+        print('Error: not a valid dataset name')
         sys.exit()
 
     train_loader = torch.utils.data.DataLoader(dataset=pose_dataset,
@@ -129,12 +131,13 @@ if __name__ == '__main__':
 
     model.cuda(gpu)
     criterion = nn.CrossEntropyLoss().cuda(gpu)
-    reg_criterion = nn.MSELoss().cuda(gpu)
+    #reg_criterion = nn.MSELoss().cuda(gpu)
+    reg_criterion = nn.L1Loss().cuda(gpu)
     # Regression loss coefficient
     alpha = args.alpha
 
     softmax = nn.Softmax().cuda(gpu)
-    idx_tensor = [idx for idx in xrange(66)]
+    idx_tensor = [idx for idx in range(66)]
     idx_tensor = Variable(torch.FloatTensor(idx_tensor)).cuda(gpu)
 
     optimizer = torch.optim.Adam([{'params': get_ignored_params(model), 'lr': 0},
@@ -142,7 +145,7 @@ if __name__ == '__main__':
                                   {'params': get_fc_params(model), 'lr': args.lr * 5}],
                                    lr = args.lr)
 
-    print 'Ready to train network.'
+    print('Ready to train network.')
     for epoch in range(num_epochs):
         for i, (images, labels, cont_labels, name) in enumerate(train_loader):
             images = Variable(images).cuda(gpu)
@@ -188,13 +191,17 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             torch.autograd.backward(loss_seq, grad_seq)
             optimizer.step()
-
+            
             if (i+1) % 100 == 0:
                 print ('Epoch [%d/%d], Iter [%d/%d] Losses: Yaw %.4f, Pitch %.4f, Roll %.4f'
-                       %(epoch+1, num_epochs, i+1, len(pose_dataset)//batch_size, loss_yaw.data[0], loss_pitch.data[0], loss_roll.data[0]))
+                       %(epoch+1, num_epochs, i+1, len(pose_dataset)//batch_size, alpha*loss_reg_yaw.data, alpha*loss_reg_pitch.data, alpha*loss_reg_roll.data))
+                
+            if (i+1) % 100 == 0:
+                print ('Epoch [%d/%d], Iter [%d/%d] Losses: Yaw %.4f, Pitch %.4f, Roll %.4f'
+                       %(epoch+1, num_epochs, i+1, len(pose_dataset)//batch_size, loss_yaw.data, loss_pitch.data, loss_roll.data))
 
         # Save models at numbered epochs.
         if epoch % 1 == 0 and epoch < num_epochs:
-            print 'Taking snapshot...'
+            print('Taking snapshot...')
             torch.save(model.state_dict(),
             'output/snapshots/' + args.output_string + '_epoch_'+ str(epoch+1) + '.pkl')

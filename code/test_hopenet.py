@@ -46,12 +46,12 @@ if __name__ == '__main__':
     # ResNet50 structure
     model = hopenet.Hopenet(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 66)
 
-    print 'Loading snapshot.'
+    print('Loading snapshot.')
     # Load snapshot
     saved_state_dict = torch.load(snapshot_path)
     model.load_state_dict(saved_state_dict)
 
-    print 'Loading data.'
+    print('Loading data.')
 
     transformations = transforms.Compose([transforms.Scale(224),
     transforms.CenterCrop(224), transforms.ToTensor(),
@@ -74,7 +74,7 @@ if __name__ == '__main__':
     elif args.dataset == 'AFW':
         pose_dataset = datasets.AFW(args.data_dir, args.filename_list, transformations)
     else:
-        print 'Error: not a valid dataset name'
+        print('Error: not a valid dataset name')
         sys.exit()
     test_loader = torch.utils.data.DataLoader(dataset=pose_dataset,
                                                batch_size=args.batch_size,
@@ -82,13 +82,13 @@ if __name__ == '__main__':
 
     model.cuda(gpu)
 
-    print 'Ready to test network.'
+    print('Ready to test network.')
 
     # Test the Model
     model.eval()  # Change model to 'eval' mode (BN uses moving mean/var).
     total = 0
 
-    idx_tensor = [idx for idx in xrange(66)]
+    idx_tensor = [idx for idx in range(66)]
     idx_tensor = torch.FloatTensor(idx_tensor).cuda(gpu)
 
     yaw_error = .0
@@ -99,11 +99,16 @@ if __name__ == '__main__':
 
     for i, (images, labels, cont_labels, name) in enumerate(test_loader):
         images = Variable(images).cuda(gpu)
-        total += cont_labels.size(0)
+        #total += cont_labels.size(0)
 
         label_yaw = cont_labels[:,0].float()
         label_pitch = cont_labels[:,1].float()
         label_roll = cont_labels[:,2].float()
+
+        if (abs(label_yaw) > 99 or abs(label_pitch) > 99 or abs(label_roll) > 99):
+            continue
+
+        total += cont_labels.size(0)
 
         yaw, pitch, roll = model(images)
 

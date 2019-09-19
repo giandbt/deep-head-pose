@@ -12,8 +12,14 @@ from torchvision import transforms
 import torch.backends.cudnn as cudnn
 import torchvision
 import torch.nn.functional as F
+from sys import path
 
-import datasets, hopenet, utils
+
+path.insert(0, os.path.join('/home/giancarlo/Documents/HeadPose-test/', 'FSA-Net', 'demo'))
+from FSANET_model import *
+
+
+import datasets, hopenet, utils_2
 
 def parse_args():
     """Parse input arguments."""
@@ -37,23 +43,48 @@ def parse_args():
     return args
 
 if __name__ == '__main__':
+    # load model and weights
+    # Parameters
+    img_size = 64
+    
+    num_capsule = 3
+    dim_capsule = 16
+    routings = 2
+    stage_num = [3, 3, 3]
+    lambda_d = 1
+    num_classes = 3
+    image_size = 64
+    num_primcaps = 7 * 3
+    m_dim = 5
+    S_set = [num_capsule, dim_capsule, routings, num_primcaps, m_dim]
+    
+    model1 = FSA_net_Capsule(image_size, num_classes, stage_num, lambda_d, S_set)()
+    
+    num_primcaps = 8 * 8 * 3
+    S_set = [num_capsule, dim_capsule, routings, num_primcaps, m_dim]
+
+    
+    print('Loading models ...')
+    
+    weight_file1 = '/home/giancarlo/Documents/HeadPose-test/FSA-Net/pre-trained/300W_LP_models/fsanet_capsule_3_16_2_21_5/fsanet_capsule_3_16_2_21_5.h5'
+    model1.load_weights(weight_file1)
+    print('Finished loading model 1.')
+    
+    inputs = Input(shape=(64, 64, 3))
+    x1 = model1(inputs)  # 1x1
+    model = Model(inputs=inputs, outputs=x1)
+    
+    
     args = parse_args()
 
     cudnn.enabled = True
     gpu = args.gpu_id
     snapshot_path = args.snapshot
 
-    model = hopenet.ResNet(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 3)
-
-    print('Loading snapshot.')
-    # Load snapshot
-    saved_state_dict = torch.load(snapshot_path)
-    model.load_state_dict(saved_state_dict)
-
     print('Loading data.')
 
-    transformations = transforms.Compose([transforms.Scale(224),
-    transforms.CenterCrop(224), transforms.ToTensor(),
+    transformations = transforms.Compose([transforms.Scale(64),
+    transforms.CenterCrop(64), transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
     if args.dataset == 'Pose_300W_LP':
@@ -79,31 +110,40 @@ if __name__ == '__main__':
                                                batch_size=args.batch_size,
                                                num_workers=2)
 
-    model.cuda(gpu)
-
     print('Ready to test network.')
 
     # Test the Model
-    model.eval()  # Change model to 'eval' mode (BN uses moving mean/var).
     total = 0
+
+    idx_tensor = [idx for idx in range(66)]
+    idx_tensor = torch.FloatTensor(idx_tensor).cpu()
 
     yaw_error = .0
     pitch_error = .0
     roll_error = .0
 
     l1loss = torch.nn.L1Loss(size_average=False)
+    count = 0
 
     for i, (images, labels, cont_labels, name) in enumerate(test_loader):
-        images = Variable(images).cuda(gpu)
-        total += cont_labels.size(0)
+        count +=1
+        print(count)
+        images = Variable(images).cpu()
+
         label_yaw = cont_labels[:,0].float()
         label_pitch = cont_labels[:,1].float()
         label_roll = cont_labels[:,2].float()
 
-        angles = model(images)
-        yaw_predicted = angles[:,0].data.cpu()
-        pitch_predicted = angles[:,1].data.cpu()
-        roll_predicted = angles[:,2].data.cpu()
+        if (abs(label_yaw) > 99 or abs(label_pitch) > 99 or abs(label_roll) > 99):
+            continue
+
+        total += cont_labels.size(0)
+        images = images.permute(0, 2, 3, 1)
+        
+        p_result = model.predict(images)
+        yaw_predicted = p_result[0][0]
+        pitch_predicted = p_result[0][1]
+        roll_predicted = p_result[0][2]
 
         # Mean absolute error
         yaw_error += torch.sum(torch.abs(yaw_predicted - label_yaw))
@@ -119,7 +159,7 @@ if __name__ == '__main__':
                 cv2_img = cv2.imread(os.path.join(args.data_dir, name + '.jpg'))
             if args.batch_size == 1:
                 error_string = 'y %.2f, p %.2f, r %.2f' % (torch.sum(torch.abs(yaw_predicted - label_yaw)), torch.sum(torch.abs(pitch_predicted - label_pitch)), torch.sum(torch.abs(roll_predicted - label_roll)))
-                cv2.putText(cv2_img, error_string, (30, cv2_img.shape[0]- 30), fontFace=1, fontScale=1, color=(0,0,255), thickness=1)
+                cv2.putText(cv2_img, error_string, (30, cv2_img.shape[0]- 30), fontFace=1, fontScale=1, color=(0,0,255), thickness=2)
             # utils.plot_pose_cube(cv2_img, yaw_predicted[0], pitch_predicted[0], roll_predicted[0], size=100)
             utils.draw_axis(cv2_img, yaw_predicted[0], pitch_predicted[0], roll_predicted[0], tdx = 200, tdy= 200, size=100)
             cv2.imwrite(os.path.join('output/images', name + '.jpg'), cv2_img)

@@ -2,7 +2,7 @@ import os
 import numpy as np
 import cv2
 import pandas as pd
-
+import json
 import torch
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
@@ -263,6 +263,7 @@ class AFLW2000(Dataset):
         pitch = pose[0] * 180 / np.pi
         yaw = pose[1] * 180 / np.pi
         roll = pose[2] * 180 / np.pi
+        
         # Bin values
         bins = np.array(range(-99, 102, 3))
         labels = torch.LongTensor(np.digitize([yaw, pitch, roll], bins) - 1)
@@ -508,16 +509,18 @@ class BIWI(Dataset):
         pose_path = os.path.join(self.data_dir, self.y_train[index] + '_pose' + self.annot_ext)
 
         y_train_list = self.y_train[index].split('/')
-        bbox_path = os.path.join(self.data_dir, y_train_list[0] + '/dockerface-' + y_train_list[-1] + '_rgb' + self.annot_ext)
+        bbox_path = os.path.join(self.data_dir, 'faces', y_train_list[0], 'face_keypoints.json')
 
-        # Load bounding box
-        bbox = open(bbox_path, 'r')
-        line = bbox.readline().split(' ')
-        if len(line) < 4:
-            x_min, y_min, x_max, y_max = 0, 0, img.size[0], img.size[1]
-        else:
-            x_min, y_min, x_max, y_max = [float(line[1]), float(line[2]), float(line[3]), float(line[4])]
-        bbox.close()
+        with open(bbox_path, 'r') as f:
+            bbox_dict = json.loads(f.read())
+
+        bbox = bbox_dict[y_train_list[0]][y_train_list[-1] + '_rgb']
+        
+        x_min = bbox['x1']
+        y_min = bbox['y1']
+        x_max = bbox['x2']
+        y_max = bbox['y2']
+        
 
         # Load pose in degrees
         pose_annot = open(pose_path, 'r')
@@ -565,4 +568,88 @@ class BIWI(Dataset):
 
     def __len__(self):
         # 15,667
+        return self.length
+
+class Custom(Dataset):
+    # 300W-LP dataset with random downsampling
+    def __init__(self, data_dir, filename_path, transform, img_ext='.jpg', annot_ext='.txt', image_mode='RGB'):
+        self.data_dir = data_dir
+        self.transform = transform
+        self.img_ext = img_ext
+        self.annot_ext = annot_ext
+
+        df = pd.read_csv(filename_path)
+
+        image_paths = df['image_path']
+        x1_list = df['x1']
+        x2_list = df['x2']
+        y1_list = df['y1']
+        y2_list = df['y2']
+        roll_list = df['roll']
+        yaw_list = df['yaw']
+        pitch_list = df['pitch']
+
+
+        self.X_train = image_paths
+        self.x1_list = x1_list
+        self.x2_list = x2_list
+        self.y1_list = y1_list
+        self.y2_list = y2_list
+        self.roll_list = roll_list
+        self.yaw_list = yaw_list
+        self.pitch_list = pitch_list
+
+        self.image_mode = image_mode
+        self.length = len(image_paths)
+
+    def __getitem__(self, index):
+        img = Image.open(os.path.join(self.data_dir, str(self.X_train[index]).zfill(12) + self.img_ext))
+        img = img.convert(self.image_mode)
+
+        # Crop the face loosely
+        x_min = self.x1_list[index]
+        y_min = self.y1_list[index]
+        x_max = self.x2_list[index]
+        y_max = self.y2_list[index]
+
+        # k = 0.2 to 0.40
+        k = np.random.random_sample() * 0.2 + 0.2
+        x_min -= 0.6 * k * abs(x_max - x_min)
+        y_min -= 2 * k * abs(y_max - y_min)
+        x_max += 0.6 * k * abs(x_max - x_min)
+        y_max += 0.6 * k * abs(y_max - y_min)
+        img = img.crop((int(x_min), int(y_min), int(x_max), int(y_max)))
+
+        # We get the pose already in degrees
+        roll = self.roll_list[index]
+        yaw = self.yaw_list[index]
+        pitch = self.pitch_list[index]
+    
+        # Flip?
+        rnd = np.random.random_sample()
+        if rnd < 0.5:
+            yaw = -yaw
+            roll = -roll
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+
+        # Blur?
+        rnd = np.random.random_sample()
+        if rnd < 0.05:
+            img = img.filter(ImageFilter.BLUR)
+
+        # Bin values
+        bins = np.array(range(-99, 102, 3))
+        binned_pose = np.digitize([yaw, pitch, roll], bins) - 1
+
+        # Get target tensors
+        labels = binned_pose
+        cont_labels = torch.FloatTensor([yaw, pitch, roll])
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, labels, cont_labels, self.X_train[index]
+
+    def __len__(self):
+        # 122,450
         return self.length
